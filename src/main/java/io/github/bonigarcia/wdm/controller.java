@@ -17,4 +17,10 @@ public class controller {
         String result = service.test1();
         return new ResponseEntity<>(result,HttpStatus.OK);
     }
+
+    @GetMapping("/test2")
+    public ResponseEntity<String> test2(){
+        service.test2();
+        return new ResponseEntity<>("ok",HttpStatus.OK);
+    }
 }

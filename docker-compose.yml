@@ -1,7 +1,7 @@
 version: '3.8'
 services:
   app:
-    image: my-crawling-service:2.7 # 네가 만든 스프링 부트 이미지 이름으로 바꿔줘
+    image: my-crawling-service:4.1 # 네가 만든 스프링 부트 이미지 이름으로 바꿔줘
     container_name: crawling-app
     ports:
       - "8080:8080" # 호스트의 8080 포트와 컨테이너의 8080 포트 연결

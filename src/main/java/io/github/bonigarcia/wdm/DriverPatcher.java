@@ -15,8 +15,11 @@ import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.Random;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -33,6 +36,7 @@ public class DriverPatcher {
     private final String zipName;
     private File executablePath;
     private int versionMain;
+    private final String exeName; // <<<------ 이 라인 추가! (멤버 변수 선언)
     private String versionFull;
     private File dataPath;
     private boolean customExePath;
@@ -40,6 +44,7 @@ public class DriverPatcher {
     private final File zipPath;
     private final boolean chromeForTesting;
     private final boolean onlyStableBuilds;
+
 
     public DriverPatcher(@Nullable String executablePath,
                          int versionMain /* 0 = automatic */,
@@ -80,6 +85,7 @@ public class DriverPatcher {
                 dataPath = new File("tmp/java_undetected_chromedriver");
             }
         }
+        this.exeName = exeName;
         this.latestStable = new File(dataPath, "LATEST_STABLE");
         if(chromeForTesting) _zipName = _zipName.replace("_", "-");
         this.zipName = _zipName;
@@ -92,7 +98,6 @@ public class DriverPatcher {
 
         zipPath = new File(dataPath, "java_undetected");
         // removed code that makes it relative to program working dir
-
         if(executablePath != null) {
             this.executablePath = new File(executablePath);
             this.customExePath = true;
@@ -210,19 +215,75 @@ public class DriverPatcher {
         downloaded.delete();
         patchExe();
     }
+    // 수정된 unzipPackage 메소드
     public void unzipPackage(File zipFile) throws IOException {
-        if(this.executablePath.exists() && !this.executablePath.delete()) {
-            Files.delete(this.executablePath.toPath());
+        // 현재 OS에 맞는 실행 파일 이름 (생성자에서 설정된 멤버 변수 사용)
+        String expectedExeName = this.exeName;
+
+        // 대상 실행 파일 경로가 이미 존재하면 삭제 시도
+        if (this.executablePath.exists()) {
+            try {
+                Files.delete(this.executablePath.toPath());
+            } catch (IOException e) {
+                logger.error("기존 실행 파일 삭제 실패: {}", this.executablePath, e);
+                throw e; // 삭제 실패 시 예외를 다시 던져서 문제를 알림
+            }
         }
-        try(FileSystem fs = FileSystems.newFileSystem(zipFile.toPath(), Collections.emptyMap())) {
-            try(Stream<Path> stream = Files.walk(fs.getRootDirectories().iterator().next())) {
-                for(Path p : stream.toList()) {
-                    if(p.getFileName() != null && p.getFileName().toString().matches(".*chromedriver\\.exe")) {
-                        Files.copy(p, executablePath.toPath());
-                        return;
+
+        // try-with-resources 사용하여 FileSystem 자동 닫기 보장
+        try (FileSystem fs = FileSystems.newFileSystem(zipFile.toPath(), Collections.emptyMap())) {
+            // zip 파일 내부의 루트 디렉토리 가져오기
+            Path zipRoot = fs.getRootDirectories().iterator().next();
+            Path executableInZip = null;
+
+            // zip 파일 내부 탐색 (Files.find 사용으로 변경 가능)
+            try (Stream<Path> stream = Files.walk(zipRoot)) {
+                // OS에 맞는 실행 파일 이름과 일치하는 첫 번째 파일 찾기
+                executableInZip = stream
+                        .filter(p -> p.getFileName() != null && p.getFileName().toString().equals(expectedExeName))
+                        .findFirst()
+                        .orElse(null); // Optional<Path> 대신 null 처리
+            }
+
+            // 실행 파일을 찾았는지 확인
+            if (executableInZip != null) {
+                // 찾은 파일을 최종 목적지 경로로 복사
+                Files.copy(executableInZip, this.executablePath.toPath());
+                logger.info("성공적으로 추출: {} -> {}", expectedExeName, this.executablePath);
+
+                // !!! 중요: Linux 또는 Mac인 경우 실행 권한 부여 (chmod +x) !!!
+                if (this.isPosix) {
+                    try {
+                        // 파일 권한 설정 (소유자: 읽기, 쓰기, 실행 / 그룹: 읽기, 실행 / 기타: 읽기, 실행) - 예시
+                        Set<PosixFilePermission> perms = EnumSet.of(
+                                PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE, PosixFilePermission.OWNER_EXECUTE,
+                                PosixFilePermission.GROUP_READ, PosixFilePermission.GROUP_EXECUTE,
+                                PosixFilePermission.OTHERS_READ, PosixFilePermission.OTHERS_EXECUTE
+                        );
+                        Files.setPosixFilePermissions(this.executablePath.toPath(), perms);
+                        logger.info("실행 권한 설정 완료: {}", this.executablePath);
+                    } catch (UnsupportedOperationException | IOException e) {
+                        // 파일 시스템이 POSIX 권한을 지원하지 않거나 오류 발생 시
+                        logger.warn("실행 권한 설정 실패 (파일 시스템 지원 안 함 또는 오류): {} - {}", this.executablePath, e.getMessage());
+                        // 대안: Runtime.exec("chmod +x ...") 사용 (덜 권장됨)
+                        try {
+                            Runtime.getRuntime().exec("chmod +x " + this.executablePath.getAbsolutePath()).waitFor();
+                            logger.info("(대안) chmod +x 실행 완료: {}", this.executablePath);
+                        } catch(Exception execEx) {
+                            logger.error("(대안) chmod +x 실행 실패: {}", this.executablePath, execEx);
+                        }
                     }
                 }
+                return; // 성공적으로 추출 및 권한 설정 후 종료
             }
+
+            // zip 파일 내에서 실행 파일을 찾지 못한 경우
+            logger.error("Zip 파일 내에서 실행 파일을 찾을 수 없음: '{}' in {}", expectedExeName, zipFile.getName());
+            throw new IOException("Zip 파일 내에서 실행 파일을 찾을 수 없음: '" + expectedExeName + "' in " + zipFile.getName());
+
+        } catch (IOException e) {
+            logger.error("Zip 파일 처리 중 오류 발생: {}", zipFile.getName(), e);
+            throw e; // 예외 다시 던지기
         }
     }
     public File fetchPackage() throws IOException {

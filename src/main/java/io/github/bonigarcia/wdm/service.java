@@ -19,10 +19,25 @@ import java.util.Random;
 @Slf4j
 public class service {
     private final UDCFactory UDCFactory;
-
+    private final String webGlURL = "https://browserleaks.com/webgl";
     @Autowired
     public service(UDCFactory UDCFactory) {
         this.UDCFactory = UDCFactory;
+    }
+
+    public void test2(){
+        UndetectedChromeDriver UDCdriver = null;
+        try {
+            UDCdriver = UDCFactory.createDriver();
+            System.out.println("WebDriver 생성 완료!");
+        }catch (Exception e){
+
+        }
+        UDCdriver.get(webGlURL);
+        String htmlSource = UDCdriver.getPageSource();
+        System.out.println("HTML Source:\n" + htmlSource);
+        UDCdriver.quit();
+        return;
     }
     public String test1() {
         UndetectedChromeDriver UDCdriver = null;
@@ -86,7 +101,7 @@ public class service {
                     // 다음 페이지 번호 증가
                     nextPage++;
                     String htmlSource = UDCdriver.getPageSource();
-//                    System.out.println("HTML Source:\n" + htmlSource);                    // 상품 아이템 로딩 대기 전 딜레이
+                    System.out.println("HTML Source:\n" + htmlSource);
                     try {
                         Thread.sleep(random.nextInt(2001) + 1000); // 1초 ~ 3초 사이 랜덤 대기
                     } catch (InterruptedException e) {
